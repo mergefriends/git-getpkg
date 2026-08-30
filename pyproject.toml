@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-install"
+version = "0.1.0"
+description = "Discover and install packages from Git repositories"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "bandit[toml]>=1.8",
+  "pip-audit>=2.10",
+  "rich>=13.5.2,<14",
+  "tomli>=2.0; python_version < '3.11'",
+]
+license = { file = "LICENSE" }
+authors = [{ name = "mergefriends" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+git-install = "git_install.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
