@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from git_install.command import CommandError, run
-from git_install.github import repositories
-from git_install.models import Package
-from git_install.source import open_source
-from git_install.trust import assess
+from git_getpkg.command import CommandError, run
+from git_getpkg.github import repositories
+from git_getpkg.models import Package
+from git_getpkg.source import open_source
+from git_getpkg.trust import assess
 
 
 class SourceTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class SourceTests(unittest.TestCase):
                 },
             ],
         ]
-        with patch("git_install.github._paged_api", return_value=payload) as paged_api:
+        with patch("git_getpkg.github._paged_api", return_value=payload) as paged_api:
             found = repositories("acme")
         paged_api.assert_called_once_with("orgs/acme/repos?type=all&per_page=100")
         self.assertEqual([repository.name for repository in found], ["python-tool", "docs"])
@@ -44,8 +44,8 @@ class SourceTests(unittest.TestCase):
     def test_missing_gh_is_explained_after_github_access_failure(self) -> None:
         failure = CommandError("git ls-remote: Repository not found")
         with (
-            patch("git_install.source._default_branch", side_effect=failure),
-            patch("git_install.source.shutil.which", return_value=None),
+            patch("git_getpkg.source._default_branch", side_effect=failure),
+            patch("git_getpkg.source.shutil.which", return_value=None),
         ):
             with self.assertRaisesRegex(CommandError, r"GitHub CLI \(`gh`\) was not found"):
                 with open_source("https://github.com/acme/private.git"):
@@ -54,8 +54,8 @@ class SourceTests(unittest.TestCase):
     def test_existing_gh_has_auth_recovery_guidance(self) -> None:
         failure = CommandError("git ls-remote: Repository not found")
         with (
-            patch("git_install.source._default_branch", side_effect=failure),
-            patch("git_install.source.shutil.which", return_value="/usr/bin/gh"),
+            patch("git_getpkg.source._default_branch", side_effect=failure),
+            patch("git_getpkg.source.shutil.which", return_value="/usr/bin/gh"),
         ):
             with self.assertRaisesRegex(CommandError, r"gh auth login.*gh auth setup-git"):
                 with open_source("git@github.com:acme/private.git"):
@@ -63,7 +63,7 @@ class SourceTests(unittest.TestCase):
 
     def test_network_failure_does_not_claim_an_authentication_problem(self) -> None:
         failure = CommandError("git ls-remote: Could not resolve host: github.com")
-        with patch("git_install.source._default_branch", side_effect=failure):
+        with patch("git_getpkg.source._default_branch", side_effect=failure):
             with self.assertRaisesRegex(CommandError, r"Could not resolve host") as raised:
                 with open_source("https://github.com/acme/private.git"):
                     pass

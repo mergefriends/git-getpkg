@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from git_install.command import run
-from git_install.models import Package, PackageReport, SourceInfo
+from git_getpkg.command import run
+from git_getpkg.models import Package, PackageReport, SourceInfo
 
 
 def _last_touched(source: SourceInfo, package: Package) -> tuple[str | None, str | None, str | None]:

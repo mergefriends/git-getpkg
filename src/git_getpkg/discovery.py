@@ -10,7 +10,7 @@ except ModuleNotFoundError:  # Python 3.9-3.10
     import tomli as tomllib
 from pathlib import Path
 
-from git_install.models import Package
+from git_getpkg.models import Package
 
 IGNORED_DIRECTORIES = {".git", ".venv", "venv", "node_modules", "vendor", "target", "__pycache__"}
 
