@@ -1,30 +1,30 @@
-# git-install
+# git-getpkg
 
-`git install` discovers packages in a local directory or Git repository,
+`git getpkg` discovers packages in a local directory or Git repository,
 then installs selected Python packages into isolated managed environments.
 
 ## Install
 
 ```bash
-brew install pipx && pipx ensurepath && pipx install git+https://github.com/mergefriends/git-install.git
+brew install pipx && pipx ensurepath && pipx install git+https://github.com/mergefriends/git-getpkg.git
 ```
 
 ## Usage
 Find all packages in a repo
 ```bash
-git install list https://github.com/psf/black
+git getpkg list https://github.com/psf/black
 ```
 Find all packages in an organization
 ```bash
-git install list https://github.com/psf
+git getpkg list https://github.com/psf
 ```
 Install all packages in a repo
 ```bash
-git install list https://github.com/psf/black
+git getpkg list https://github.com/psf/black
 ```
 Install a single package from a repo
 ```bash
-git install list https://github.com/psf/black black
+git getpkg list https://github.com/psf/black black
 ```
 
 ## Development
