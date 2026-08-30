@@ -10,15 +10,21 @@ brew install pipx && pipx ensurepath && pipx install git+https://github.com/merg
 ```
 
 ## Usage
-
+Find all packages in a repo
 ```bash
-git install list ./my-monorepo
-git install list https://example.com/team/project.git
-git install list https://github.com/octo-org
-git install list https://github.com/octo-org --discover-packages
-git install ./my-monorepo
-git install ./my-monorepo api-client --dry-run
-git install ./my-monorepo api-client --yes
+git install list https://github.com/psf/black
+```
+Find all packages in an organization
+```bash
+git install list https://github.com/psf
+```
+Install all packages in a repo
+```bash
+git install list https://github.com/psf/black
+```
+Install a single package from a repo
+```bash
+git install list https://github.com/psf/black black
 ```
 
 ## Development
