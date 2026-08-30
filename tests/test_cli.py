@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from rich.console import Console
 
-from git_install.cli import (
+from git_getpkg.cli import (
     _list_github_owner,
     _reports,
     github_owner_from_source,
@@ -19,8 +19,8 @@ from git_install.cli import (
     render_reports,
     render_repositories,
 )
-from git_install.github import Repository
-from git_install.models import Package, PackageReport, SourceInfo
+from git_getpkg.github import Repository
+from git_getpkg.models import Package, PackageReport, SourceInfo
 
 
 class CliTests(unittest.TestCase):
@@ -39,7 +39,7 @@ class CliTests(unittest.TestCase):
                 "acme",
                 "https://github.com/acme",
             )
-            with patch("git_install.cli.github_signals") as github_signals:
+            with patch("git_getpkg.cli.github_signals") as github_signals:
                 _reports(source, enrich=False)
             github_signals.assert_not_called()
 
@@ -59,7 +59,7 @@ class CliTests(unittest.TestCase):
                 "https://github.com/acme",
             )
             with patch(
-                "git_install.cli.github_signals", return_value=["GitHub: verified organization"]
+                "git_getpkg.cli.github_signals", return_value=["GitHub: verified organization"]
             ) as github_signals:
                 reports = _reports(source, enrich=True)
             github_signals.assert_called_once_with(source)
@@ -135,7 +135,7 @@ class CliTests(unittest.TestCase):
         )
         args = SimpleNamespace(as_json=True, no_links=True, discover_packages=False)
         output = StringIO()
-        with patch("git_install.cli.github_repositories", return_value=[active, archived]), redirect_stdout(output):
+        with patch("git_getpkg.cli.github_repositories", return_value=[active, archived]), redirect_stdout(output):
             result = _list_github_owner("acme", args, console=Console(), show_progress=False)
         self.assertEqual(result, 0)
         self.assertIn('"active"', output.getvalue())
@@ -168,8 +168,8 @@ class CliTests(unittest.TestCase):
         args = SimpleNamespace(as_json=False, no_links=True, discover_packages=False)
         output = StringIO()
         with (
-            patch("git_install.cli.github_repositories", return_value=[candidate, skipped]),
-            patch("git_install.cli.sys.stdin.isatty", return_value=False),
+            patch("git_getpkg.cli.github_repositories", return_value=[candidate, skipped]),
+            patch("git_getpkg.cli.sys.stdin.isatty", return_value=False),
             redirect_stdout(output),
         ):
             result = _list_github_owner("acme", args, console=Console(), show_progress=False)
@@ -230,11 +230,11 @@ class CliTests(unittest.TestCase):
         args = SimpleNamespace(as_json=False, no_links=True, discover_packages=True)
         output = StringIO()
         with (
-            patch("git_install.cli.github_repositories", return_value=[candidate]),
-            patch("git_install.cli.open_source", fake_open_source),
-            patch("git_install.cli._reports", return_value=[report]),
-            patch("git_install.cli.sys.stdin.isatty", return_value=True),
-            patch("git_install.cli._confirm", return_value=False) as confirm,
+            patch("git_getpkg.cli.github_repositories", return_value=[candidate]),
+            patch("git_getpkg.cli.open_source", fake_open_source),
+            patch("git_getpkg.cli._reports", return_value=[report]),
+            patch("git_getpkg.cli.sys.stdin.isatty", return_value=True),
+            patch("git_getpkg.cli._confirm", return_value=False) as confirm,
             redirect_stdout(output),
         ):
             result = _list_github_owner("acme", args, console=Console(), show_progress=False)

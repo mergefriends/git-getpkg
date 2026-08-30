@@ -8,8 +8,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-from git_install.command import CommandError, run
-from git_install.models import SourceInfo
+from git_getpkg.command import CommandError, run
+from git_getpkg.models import SourceInfo
 
 MAX_REMOTE_CHECKOUT_BYTES = 512 * 1024 * 1024
 
@@ -118,7 +118,7 @@ def open_source(value: str, *, clone_timeout: float = 300):
         yield SourceInfo(value, root, False, commit, branch, None, root.name, None, None)
         return
 
-    temp_root = Path(tempfile.mkdtemp(prefix="git-install-"))
+    temp_root = Path(tempfile.mkdtemp(prefix="git-getpkg-"))
     try:
         _validate_remote_url(value)
         try:

@@ -20,16 +20,16 @@ git getpkg list https://github.com/psf
 ```
 Install all packages in a repo
 ```bash
-git getpkg list https://github.com/psf/black
+git getpkg https://github.com/psf/black
 ```
 Install a single package from a repo
 ```bash
-git getpkg list https://github.com/psf/black black
+git getpkg https://github.com/psf/black black
 ```
 
 ## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
-PYTHONPATH=src python3 -m git_install list .
+PYTHONPATH=src python3 -m git_getpkg list .
 ```

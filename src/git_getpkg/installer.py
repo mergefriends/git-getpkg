@@ -8,8 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from git_install.command import run
-from git_install.models import Package
+from git_getpkg.command import run
+from git_getpkg.models import Package
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ def environment_path(package: Package, commit: str | None, source_identity: str)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", package.name).strip("-") or "package"
     identity = f"{source_identity}\0{commit or 'working-tree'}\0{package.relative_path}"
     suffix = hashlib.sha256(identity.encode()).hexdigest()[:12]
-    return data_home / "git-install" / "environments" / f"{safe_name}-{suffix}"
+    return data_home / "git-getpkg" / "environments" / f"{safe_name}-{suffix}"
 
 
 def bin_directory() -> Path:
@@ -59,8 +59,8 @@ def ensure_bin_on_path(
         entry = f"set -gx PATH {shlex.quote(str(directory))} $PATH"
     else:
         return PathResult(False, None, f"Could not identify a supported shell; add {directory} to PATH")
-    start = "# >>> git-install PATH >>>"
-    end = "# <<< git-install PATH <<<"
+    start = "# >>> git-getpkg PATH >>>"
+    end = "# <<< git-getpkg PATH <<<"
     existing = profile.read_text() if profile.exists() else ""
     if start not in existing:
         profile.parent.mkdir(parents=True, exist_ok=True)
@@ -115,13 +115,13 @@ def create_command_shims(
         destination = directory / (f"{name}.cmd" if os.name == "nt" else name)
         if not source.exists():
             continue
-        if destination.exists() and "Managed by git-install" not in destination.read_text(errors="ignore"):
+        if destination.exists() and "Managed by git-getpkg" not in destination.read_text(errors="ignore"):
             conflicts.append(name)
             continue
         if os.name == "nt":
-            destination.write_text(f'@rem Managed by git-install\r\n@"{source}" %*\r\n')
+            destination.write_text(f'@rem Managed by git-getpkg\r\n@"{source}" %*\r\n')
         else:
-            destination.write_text(f'#!/bin/sh\n# Managed by git-install\nexec {shlex.quote(str(source))} "$@"\n')
+            destination.write_text(f'#!/bin/sh\n# Managed by git-getpkg\nexec {shlex.quote(str(source))} "$@"\n')
             destination.chmod(0o755)
         created.append(name)
     return ShimResult(directory, created, conflicts)

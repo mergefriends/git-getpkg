@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from git_install.discovery import discover
-from git_install.installer import create_command_shims, ensure_bin_on_path
-from git_install.models import Package
+from git_getpkg.discovery import discover
+from git_getpkg.installer import create_command_shims, ensure_bin_on_path
+from git_getpkg.models import Package
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -78,4 +78,4 @@ class DiscoveryTests(unittest.TestCase):
             second = ensure_bin_on_path(directory=target, shell="/bin/zsh", home=home)
             self.assertTrue(first.configured)
             self.assertFalse(second.configured)
-            self.assertEqual((home / ".zshrc").read_text().count("# >>> git-install PATH >>>"), 1)
+            self.assertEqual((home / ".zshrc").read_text().count("# >>> git-getpkg PATH >>>"), 1)

@@ -7,8 +7,8 @@ import shutil
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from git_install.command import run
-from git_install.models import SourceInfo
+from git_getpkg.command import run
+from git_getpkg.models import SourceInfo
 
 SUPPORTED_PRIMARY_LANGUAGES = frozenset({"Python", "JavaScript", "TypeScript", "Rust", "Go", "Ruby", "PHP"})
 

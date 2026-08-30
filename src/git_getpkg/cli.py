@@ -11,11 +11,11 @@ from urllib.parse import urlparse
 
 from rich.console import Console
 
-from git_install.discovery import discover
-from git_install.github import Repository
-from git_install.github import repositories as github_repositories
-from git_install.github import signals as github_signals
-from git_install.installer import (
+from git_getpkg.discovery import discover
+from git_getpkg.github import Repository
+from git_getpkg.github import repositories as github_repositories
+from git_getpkg.github import signals as github_signals
+from git_getpkg.installer import (
     bin_directory,
     create_command_shims,
     ensure_bin_on_path,
@@ -23,11 +23,11 @@ from git_install.installer import (
     install_python,
     validate_python,
 )
-from git_install.models import PackageReport, SourceInfo
-from git_install.security import findings as security_findings
-from git_install.security import scan_python
-from git_install.source import open_source
-from git_install.trust import assess, source_signals
+from git_getpkg.models import PackageReport, SourceInfo
+from git_getpkg.security import findings as security_findings
+from git_getpkg.security import scan_python
+from git_getpkg.source import open_source
+from git_getpkg.trust import assess, source_signals
 
 MAX_PARALLEL_REPOSITORY_SCANS = 8
 OWNER_DISCOVERY_CLONE_TIMEOUT_SECONDS = 90
@@ -270,7 +270,7 @@ def _list_github_owner(owner: str, args: argparse.Namespace, *, console: Console
         if show_progress
         else nullcontext()
     )
-    with activity as status, ThreadPoolExecutor(max_workers=workers, thread_name_prefix="git-install") as executor:
+    with activity as status, ThreadPoolExecutor(max_workers=workers, thread_name_prefix="git-getpkg") as executor:
         futures = {executor.submit(_scan_github_repository, repository): repository for repository in candidates}
         for completed, future in enumerate(as_completed(futures), start=1):
             repository = futures[future]
@@ -297,8 +297,8 @@ def _list_github_owner(owner: str, args: argparse.Namespace, *, console: Console
         )
         if sys.stdin.isatty() and _confirm("Show discovered packages?", False):
             print(render_owner_reports(reports, links=links))
-            print("\nInstall one: git install <repository source> <package>")
-            print("Install all from a repository: git install <repository source>")
+            print("\nInstall one: git getpkg <repository source> <package>")
+            print("Install all from a repository: git getpkg <repository source>")
     elif not failures:
         print("No supported package manifests found in eligible repositories.")
     return 1 if failures else 0
@@ -338,7 +338,7 @@ def _install(
                 print("  $ " + shlex.join(command))
     managed_bin = bin_directory()
     if str(managed_bin) not in os.environ.get("PATH", "").split(os.pathsep) and show_review:
-        print(f"\nAfter installation, git install will add {managed_bin} to your shell PATH for future terminals.")
+        print(f"\nAfter installation, git getpkg will add {managed_bin} to your shell PATH for future terminals.")
     if args.dry_run:
         return 0
     if not args.yes and sys.stdin.isatty() and _confirm("Show Live security scan findings?", False):
@@ -411,9 +411,9 @@ def _print_install_review(source: SourceInfo, selected: list[PackageReport]) -> 
 
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(
-        prog="git install", description="Safely discover and install packages from Git sources."
+        prog="git getpkg", description="Safely discover and install packages from Git sources."
     )
-    command.add_argument("--version", action="version", version="git-install 0.1.0")
+    command.add_argument("--version", action="version", version="git-getpkg 0.1.0")
     subcommands = command.add_subparsers(dest="command", required=False)
     list_command = subcommands.add_parser("list", help="Discover packages without executing repository code")
     list_command.add_argument("source")
@@ -434,7 +434,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     values = list(argv if argv is not None else sys.argv[1:])
-    # `git install <source>` is the friendly default form.
+    # `git getpkg <source>` is the friendly default form.
     if values and values[0] not in {"list", "install", "--help", "-h", "--version"}:
         values.insert(0, "install")
     args = parser().parse_args(values)
@@ -469,5 +469,5 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             return _install(source, reports, args, console=console, show_progress=show_progress)
     except (ValueError, RuntimeError, OSError) as error:
-        print(f"git install: {error}", file=sys.stderr)
+        print(f"git getpkg: {error}", file=sys.stderr)
         return 2

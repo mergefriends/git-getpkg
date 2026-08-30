@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-from git_install.command import CommandError, run
+from git_getpkg.command import CommandError, run
 
 SECURITY_SCAN_EXCLUDES = ".git,.venv,venv,node_modules,tests,test,docs,examples,benchmarks,benchmark"
 

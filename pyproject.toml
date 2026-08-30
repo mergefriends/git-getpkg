@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "git-install"
+name = "git-getpkg"
 version = "0.1.0"
-description = "Discover and install packages from Git repositories"
+description = "Discover and easily install packages from Git repositories"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 [project.scripts]
-git-install = "git_install.cli:main"
+git-getpkg = "git_getpkg.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -37,7 +37,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
