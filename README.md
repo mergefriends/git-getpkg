@@ -1,7 +1,6 @@
 # git-getpkg
 
-`git getpkg` discovers packages in a local directory or Git repository,
-then installs selected Python packages into isolated managed environments.
+Install every Python tool in a repository with one Git command — no hunting through folders, no manual virtualenv setup.
 
 ## Install
 Linux:
