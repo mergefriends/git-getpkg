@@ -8,11 +8,20 @@ from unittest.mock import patch
 from git_getpkg.command import CommandError, run
 from git_getpkg.github import repositories
 from git_getpkg.models import Package
-from git_getpkg.source import open_source
+from git_getpkg.source import cleanup_stale_remote_checkouts, open_source
 from git_getpkg.trust import assess
 
 
 class SourceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.cache = tempfile.TemporaryDirectory()
+        self.cache_environment = patch.dict("os.environ", {"XDG_CACHE_HOME": self.cache.name}, clear=False)
+        self.cache_environment.start()
+
+    def tearDown(self) -> None:
+        self.cache_environment.stop()
+        self.cache.cleanup()
+
     def test_github_owner_repositories_flatten_pages_and_filter_languages(self) -> None:
         payload = [
             [
@@ -44,7 +53,7 @@ class SourceTests(unittest.TestCase):
     def test_missing_gh_is_explained_after_github_access_failure(self) -> None:
         failure = CommandError("git ls-remote: Repository not found")
         with (
-            patch("git_getpkg.source._default_branch", side_effect=failure),
+            patch("git_getpkg.source.run", side_effect=failure),
             patch("git_getpkg.source.shutil.which", return_value=None),
         ):
             with self.assertRaisesRegex(CommandError, r"GitHub CLI \(`gh`\) was not found"):
@@ -54,7 +63,7 @@ class SourceTests(unittest.TestCase):
     def test_existing_gh_has_auth_recovery_guidance(self) -> None:
         failure = CommandError("git ls-remote: Repository not found")
         with (
-            patch("git_getpkg.source._default_branch", side_effect=failure),
+            patch("git_getpkg.source.run", side_effect=failure),
             patch("git_getpkg.source.shutil.which", return_value="/usr/bin/gh"),
         ):
             with self.assertRaisesRegex(CommandError, r"gh auth login.*gh auth setup-git"):
@@ -63,7 +72,7 @@ class SourceTests(unittest.TestCase):
 
     def test_network_failure_does_not_claim_an_authentication_problem(self) -> None:
         failure = CommandError("git ls-remote: Could not resolve host: github.com")
-        with patch("git_getpkg.source._default_branch", side_effect=failure):
+        with patch("git_getpkg.source.run", side_effect=failure):
             with self.assertRaisesRegex(CommandError, r"Could not resolve host") as raised:
                 with open_source("https://github.com/acme/private.git"):
                     pass
@@ -100,6 +109,16 @@ class SourceTests(unittest.TestCase):
                 self.assertTrue((checkout / "pyproject.toml").exists())
                 self.assertIsNotNone(source.commit)
             self.assertFalse(checkout.exists())
+
+    def test_next_run_removes_an_abandoned_remote_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache_home = Path(directory)
+            abandoned = cache_home / "git-getpkg" / "checkouts" / "git-getpkg-abandoned"
+            abandoned.mkdir(parents=True)
+            (abandoned / "source").mkdir()
+            with patch.dict("os.environ", {"XDG_CACHE_HOME": str(cache_home)}, clear=False):
+                cleanup_stale_remote_checkouts()
+            self.assertFalse(abandoned.exists())
 
     def test_last_touched_prefers_commit_user_over_author(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -6,7 +6,7 @@ then installs selected Python packages into isolated managed environments.
 ## Install
 
 ```bash
-brew install pipx && pipx ensurepath && pipx install git+https://github.com/mergefriends/git-getpkg.git
+brew install pipx && pipx ensurepath && pipx install git-getpkg
 ```
 
 ## Usage
@@ -27,9 +27,12 @@ Install a single package from a repo
 git getpkg https://github.com/psf/black black
 ```
 
-## Development
+## Develop, build, and test locally
+
+Requires Python 3.10+ and pipx. From the repository root:
 
 ```bash
-python3 -m unittest discover -s tests -v
-PYTHONPATH=src python3 -m git_getpkg list .
-```
+pipx install --editable . --force
+pipx run pytest -q
+git getpkg list .
+g```

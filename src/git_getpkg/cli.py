@@ -4,39 +4,77 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack, nullcontext
+from io import StringIO
 from urllib.parse import urlparse
 
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+from rich.table import Table
+from rich.text import Text
 
 from git_getpkg.discovery import discover
 from git_getpkg.github import Repository
 from git_getpkg.github import repositories as github_repositories
 from git_getpkg.github import signals as github_signals
 from git_getpkg.installer import (
-    bin_directory,
-    create_command_shims,
-    ensure_bin_on_path,
+    audit_python,
+    audit_python_application,
+    ensure_pipx_path,
+    expose_python_application,
     high_risk_pip_signals,
     install_python,
+    install_python_application,
+    remove_environment,
+    remove_python_application,
     validate_python,
+    validate_python_application,
 )
 from git_getpkg.models import PackageReport, SourceInfo
 from git_getpkg.security import findings as security_findings
 from git_getpkg.security import scan_python
-from git_getpkg.source import open_source
+from git_getpkg.source import cleanup_stale_remote_checkouts, open_source
 from git_getpkg.trust import assess, source_signals
 
 MAX_PARALLEL_REPOSITORY_SCANS = 8
 OWNER_DISCOVERY_CLONE_TIMEOUT_SECONDS = 90
 
 
-def _link(label: str, url: str | None, enabled: bool) -> str:
-    if not url or not enabled:
-        return label
-    return f"\033]8;;{url}\033\\{label}\033]8;;\033\\"
+def _link(label: str, url: str | None, enabled: bool) -> Text:
+    return Text(label, style=f"link {url}") if url and enabled else Text(label)
+
+
+def _terminal_width() -> int:
+    return shutil.get_terminal_size(fallback=(100, 24)).columns
+
+
+def _render_table(headers: list[str], rows: list[list[str | Text]], *, links: bool = False) -> str:
+    """Render a compact table that adapts to the active terminal width."""
+    width = _terminal_width()
+    stream = StringIO()
+    console = Console(
+        file=stream,
+        width=width,
+        force_terminal=links,
+        color_system="standard" if links else None,
+        highlight=False,
+    )
+    table = Table(box=None, pad_edge=False, collapse_padding=True, show_edge=False, header_style="bold")
+    for header in headers:
+        table.add_column(
+            header,
+            overflow="ellipsis",
+            max_width=max(24, width // 2) if header in {"Signals", "Finding"} else None,
+            no_wrap=header not in {"Signals", "Finding"},
+            ratio=1 if header in {"Signals", "Finding"} else None,
+        )
+    for row in rows:
+        table.add_row(*row)
+    console.print(table)
+    return stream.getvalue().rstrip()
 
 
 def _display_date(value: str | None) -> str:
@@ -63,47 +101,39 @@ def _compact_signals(signals: list[str], *, limit: int = 2) -> str:
 
 
 def render_reports(reports: list[PackageReport], source: SourceInfo, *, links: bool) -> str:
-    headers = ["Package", "Type", "Repository", "Namespace", "Path", "Last touched", "Signals"]
-    raw_rows: list[list[str]] = []
+    width = _terminal_width()
+    if width < 80:
+        headers = ["Package", "Last touched", "Signals"]
+    elif width < 110:
+        headers = ["Package", "Type", "Last touched", "Signals"]
+    else:
+        headers = ["Package", "Type", "Repository", "Namespace", "Path", "Last touched", "Signals"]
+    rows: list[list[str | Text]] = []
     for report in reports:
         touched = (
             "—" if not report.last_touched_by else f"{report.last_touched_by}, {_display_date(report.last_touched_at)}"
         )
-        raw_rows.append(
-            [
-                report.package.name + (f" {report.package.version}" if report.package.version else ""),
-                report.package.ecosystem,
-                source.repository_name,
-                source.namespace or "—",
-                report.package.relative_path,
-                touched,
-                _compact_signals(report.signals),
-            ]
-        )
-    widths = [len(header) for header in headers]
-    for row in raw_rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(cell))
-    output = ["  ".join(header.ljust(widths[index]) for index, header in enumerate(headers))]
-    output.append("  ".join("-" * width for width in widths))
-    for row in raw_rows:
-        rendered = list(row)
-        rendered[2] = _link(row[2], source.repository_url, links)
-        rendered[3] = _link(row[3], source.namespace_url, links) if row[3] != "—" else row[3]
-        output.append(
-            "  ".join(cell + " " * max(0, widths[index] - len(row[index])) for index, cell in enumerate(rendered))
-        )
-    return "\n".join(output)
+        values: dict[str, str | Text] = {
+            "Package": report.package.name + (f" {report.package.version}" if report.package.version else ""),
+            "Type": report.package.ecosystem,
+            "Repository": _link(source.repository_name, source.repository_url, links),
+            "Namespace": _link(source.namespace, source.namespace_url, links) if source.namespace else "—",
+            "Path": report.package.relative_path,
+            "Last touched": touched,
+            "Signals": _compact_signals(report.signals),
+        }
+        rows.append([values[header] for header in headers])
+    return _render_table(headers, rows, links=links)
 
 
 def render_repositories(repositories: list[Repository], *, links: bool) -> str:
     headers = ["Repository", "Language", "Updated", "Visibility", "Status", "Package scan"]
-    rows: list[list[str]] = []
+    rows: list[list[str | Text]] = []
     for repository in repositories:
         status = "archived" if repository.archived else "fork" if repository.fork else "active"
         rows.append(
             [
-                repository.name,
+                _link(repository.name, repository.url, links),
                 repository.language or "—",
                 _display_date(repository.updated_at),
                 "private" if repository.private else "public",
@@ -111,19 +141,7 @@ def render_repositories(repositories: list[Repository], *, links: bool) -> str:
                 "eligible" if repository.is_package_candidate else "skipped",
             ]
         )
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(cell))
-    output = ["  ".join(header.ljust(widths[index]) for index, header in enumerate(headers))]
-    output.append("  ".join("-" * width for width in widths))
-    for repository, row in zip(repositories, rows):
-        rendered = list(row)
-        rendered[0] = _link(row[0], repository.url, links)
-        output.append(
-            "  ".join(cell + " " * max(0, widths[index] - len(row[index])) for index, cell in enumerate(rendered))
-        )
-    return "\n".join(output)
+    return _render_table(headers, rows, links=links)
 
 
 def render_discovery_size_footer(repositories: list[Repository], table: str) -> str:
@@ -138,43 +156,39 @@ def render_discovery_size_footer(repositories: list[Repository], table: str) -> 
 
 
 def render_owner_reports(reports: list[tuple[SourceInfo, PackageReport]], *, links: bool) -> str:
-    headers = ["Repository source", "Package", "Install", "Last touched", "Signals"]
-    rows: list[list[str]] = []
+    width = _terminal_width()
+    headers = (
+        ["Repository source", "Package", "Signals"]
+        if width < 100
+        else ["Repository source", "Package", "Install", "Last touched", "Signals"]
+    )
+    rows: list[list[str | Text]] = []
     for source, report in reports:
         touched = (
             "—" if not report.last_touched_by else f"{report.last_touched_by}, {_display_date(report.last_touched_at)}"
         )
-        rows.append(
-            [
-                source.repository_url or source.original,
-                report.package.name + (f" {report.package.version}" if report.package.version else ""),
-                "Python ready" if report.package.ecosystem == "Python" and report.package.installable else "list only",
-                touched,
-                _compact_signals(report.signals),
-            ]
-        )
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(cell))
-    output = ["  ".join(header.ljust(widths[index]) for index, header in enumerate(headers))]
-    output.append("  ".join("-" * width for width in widths))
-    for (source, _), row in zip(reports, rows):
-        rendered = list(row)
-        rendered[0] = _link(row[0], source.repository_url, links)
-        output.append(
-            "  ".join(cell + " " * max(0, widths[index] - len(row[index])) for index, cell in enumerate(rendered))
-        )
-    return "\n".join(output)
+        values: dict[str, str | Text] = {
+            "Repository source": _link(source.repository_url or source.original, source.repository_url, links),
+            "Package": report.package.name + (f" {report.package.version}" if report.package.version else ""),
+            "Install": (
+                "Python ready" if report.package.ecosystem == "Python" and report.package.installable else "list only"
+            ),
+            "Last touched": touched,
+            "Signals": _compact_signals(report.signals),
+        }
+        rows.append([values[header] for header in headers])
+    return _render_table(headers, rows, links=links)
 
 
-def _reports(source: SourceInfo, *, enrich: bool) -> list[PackageReport]:
+def _reports(source: SourceInfo, *, enrich: bool, security_package: str | None = None) -> list[PackageReport]:
     packages = discover(source.root)
     context = github_signals(source) if enrich else []
     base = source_signals(source)
     reports = [assess(source, package, context, base) for package in packages]
     for report in reports:
-        if report.package.ecosystem == "Python":
+        if report.package.ecosystem == "Python" and (
+            security_package is None or report.package.name == security_package
+        ):
             report.signals.append(scan_python(report.package.directory))
     return reports
 
@@ -197,6 +211,26 @@ def _select(reports: list[PackageReport], name: str | None) -> list[PackageRepor
         locations = ", ".join(report.package.relative_path for report in matches)
         raise ValueError(f"Package name {name!r} is ambiguous: {locations}")
     return matches
+
+
+def _print_source_risk_findings(reports: list[PackageReport]) -> None:
+    """Print detailed non-executing Bandit findings for selected Python packages."""
+    rows: list[list[str]] = []
+    for report in reports:
+        for severity, rule, filename, line, message in security_findings(report.package.directory):
+            rows.append([severity, rule, filename, str(line), message])
+    if rows:
+        print(_render_table(["Severity", "Rule", "File", "Line", "Finding"], rows))
+    else:
+        print("No high or medium source-risk findings.")
+
+
+def _source_risk_command(source: str, package: str | None) -> str:
+    """Return a copy-pasteable command for detailed source-risk findings."""
+    values = ["git", "getpkg", "scan", source]
+    if package:
+        values.append(package)
+    return shlex.join(values)
 
 
 def _scan_github_repository(repository: Repository) -> list[tuple[SourceInfo, PackageReport]]:
@@ -330,22 +364,11 @@ def _install(
     if unsupported:
         raise RuntimeError(f"v1 can install only installable Python projects: {', '.join(unsupported)}")
     source_identity = source.repository_url or str(source.root)
-    plans = [install_python(item.package, source.commit, source_identity, dry_run=True) for item in selected]
-    if show_review:
-        for target, commands in plans:
-            print(f"\nTarget environment: {target}")
-            for command in commands:
-                print("  $ " + shlex.join(command))
-    managed_bin = bin_directory()
-    if str(managed_bin) not in os.environ.get("PATH", "").split(os.pathsep) and show_review:
-        print(f"\nAfter installation, git getpkg will add {managed_bin} to your shell PATH for future terminals.")
     if args.dry_run:
         return 0
-    if not args.yes and sys.stdin.isatty() and _confirm("Show Live security scan findings?", False):
-        print("\nSeverity  Rule  File  Line  Finding")
-        for report in selected:
-            for severity, rule, filename, line, message in security_findings(report.package.directory):
-                print(f"{severity:<8}  {rule:<4}  {filename}  {line:<4}  {message}")
+    console.print(
+        f"[yellow]Source-risk details:[/] [dim]{_source_risk_command(args.source, args.package)}[/]"
+    )
     if not _confirm(
         f"Install {len(selected)} package(s)? These commands may execute package build/install code. Continue?",
         args.yes,
@@ -353,60 +376,92 @@ def _install(
         print("Cancelled.")
         return 0
     failures = 0
-    for report in selected:
-        try:
-            activity = (
-                console.status(f"Installing {report.package.name}…", spinner="dots") if show_progress else nullcontext()
-            )
-            with activity:
-                target, _ = install_python(report.package, source.commit, source_identity, dry_run=False)
-            print(f"Installed {report.package.name} into {target}")
-            validation_error = validate_python(target)
-            if validation_error:
+    progress = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console,
+            transient=True,
+        )
+        if show_progress
+        else None
+    )
+    with progress or nullcontext():
+        for report in selected:
+            task = progress.add_task(f"Installing {report.package.name}", total=4) if progress else None
+            try:
+                if report.package.has_console_scripts:
+                    install_python_application(report.package, dry_run=False)
+                    target = None
+                else:
+                    target, _ = install_python(report.package, source.commit, source_identity, dry_run=False)
+                if progress:
+                    progress.update(task, description=f"Validating {report.package.name}", completed=1)
+                validation_error = (
+                    validate_python_application(report.package) if target is None else validate_python(target)
+                )
+                if progress:
+                    progress.update(task, description=f"Auditing dependencies for {report.package.name}", completed=2)
+                audit = audit_python_application(report.package) if target is None else audit_python(target)
+                if validation_error or audit.error or audit.findings:
+                    failures += 1
+                    if report.package.has_console_scripts:
+                        remove_python_application(report.package)
+                    elif target:
+                        remove_environment(target)
+                    console.print(
+                        f"[bold red]✗ Installation failed for {report.package.name}; staged environment removed.[/]"
+                    )
+                    if validation_error:
+                        print(f"Dependency validation failed: {validation_error}", file=sys.stderr)
+                    if audit.error:
+                        print(f"Dependency audit unavailable: {audit.error}", file=sys.stderr)
+                    for package, version, advisory, fixes in audit.findings:
+                        fixed = ", ".join(fixes) or "no fix published"
+                        print(f"Dependency audit: {package} {version} · {advisory} · fixed in {fixed}", file=sys.stderr)
+                    continue
+                if target:
+                    print(f"Installed {report.package.name} into {target}")
+                else:
+                    if progress:
+                        progress.update(task, description=f"Exposing commands for {report.package.name}", completed=3)
+                    expose_python_application(report.package)
+                    ensure_pipx_path()
+                    print("Pipx manages this package's commands. Open a new terminal if they are not yet on PATH.")
+                if progress:
+                    progress.update(task, description=f"Installed {report.package.name}", completed=4)
+                console.print(f"[bold green]✓ Installed {report.package.name} · dependency audit clean (OSV).[/]")
+            except Exception as error:  # Continue to report every requested package.
                 failures += 1
-                print(f"Dependency validation failed for {report.package.name}: {validation_error}", file=sys.stderr)
-            shims = create_command_shims(report.package, target)
-            if shims.created:
-                print(f"Added command(s) to {shims.directory}: {', '.join(shims.created)}")
-                path_result = ensure_bin_on_path(directory=shims.directory)
-                print(path_result.message)
-                if path_result.configured:
-                    print("Open a new terminal to use these commands by name.")
-            if shims.conflicts:
-                print(f"Did not replace existing command(s): {', '.join(shims.conflicts)}", file=sys.stderr)
-        except Exception as error:  # Continue to report every requested package.
-            failures += 1
-            print(f"Failed to install {report.package.name}: {error}", file=sys.stderr)
+                console.print(f"[bold red]✗ Failed to install {report.package.name}: {error}[/]")
     return 1 if failures else 0
 
 
 def _print_install_review(source: SourceInfo, selected: list[PackageReport]) -> None:
     """Show the opt-in pre-install review in a compact table."""
-    headers = ["Package", "Commit", "Live security scan", "Signals"]
+    headers = ["Package", "Source risk scan", "Signals"] if _terminal_width() < 90 else [
+        "Package",
+        "Commit",
+        "Source risk scan",
+        "Signals",
+    ]
     rows: list[list[str]] = []
     for report in selected:
         security = next(
-            (item for item in report.signals if item.startswith("Live security scan:")),
-            "Live security scan: unavailable",
+            (item for item in report.signals if item.startswith("Source risk scan (Bandit):")),
+            "Source risk scan (Bandit): unavailable",
         )
         other = [item for item in report.signals if item != security]
-        rows.append(
-            [
-                report.package.name,
-                (source.commit or "unresolved")[:12],
-                security.removeprefix("Live security scan: "),
-                _compact_signals(other, limit=4),
-            ]
-        )
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(cell))
+        values = {
+            "Package": report.package.name,
+            "Commit": (source.commit or "unresolved")[:12],
+            "Source risk scan": security.removeprefix("Source risk scan (Bandit): "),
+            "Signals": _compact_signals(other, limit=4),
+        }
+        rows.append([values[header] for header in headers])
     print()
-    print("  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
-    print("  ".join("-" * width for width in widths))
-    for row in rows:
-        print("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)))
+    print(_render_table(headers, rows))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -429,13 +484,16 @@ def parser() -> argparse.ArgumentParser:
     install.add_argument("package", nargs="?")
     install.add_argument("--dry-run", action="store_true")
     install.add_argument("--yes", action="store_true")
+    scan = subcommands.add_parser("scan", help="Show detailed non-executing source-risk findings")
+    scan.add_argument("source")
+    scan.add_argument("package", nargs="?")
     return command
 
 
 def main(argv: list[str] | None = None) -> int:
     values = list(argv if argv is not None else sys.argv[1:])
     # `git getpkg <source>` is the friendly default form.
-    if values and values[0] not in {"list", "install", "--help", "-h", "--version"}:
+    if values and values[0] not in {"list", "install", "scan", "--help", "-h", "--version"}:
         values.insert(0, "install")
     args = parser().parse_args(values)
     if args.command is None:
@@ -443,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         console = Console(stderr=True)
+        cleanup_stale_remote_checkouts()
         show_progress = sys.stderr.isatty() and not (args.command == "list" and args.as_json)
         github_owner = github_owner_from_source(args.source) if args.command == "list" else None
         if github_owner:
@@ -454,8 +513,12 @@ def main(argv: list[str] | None = None) -> int:
             with activity as status:
                 source = stack.enter_context(open_source(args.source))
                 if status:
-                    status.update("Scanning package manifests and running Security scan…")
-                reports = _reports(source, enrich=args.command == "install")
+                    status.update("Scanning package manifests and running source risk scan…")
+                reports = _reports(
+                    source,
+                    enrich=args.command == "install",
+                    security_package=args.package if args.command in {"install", "scan"} else None,
+                )
                 if status and args.command == "install":
                     status.update("Preparing installation review…")
             if args.command == "list":
@@ -466,6 +529,13 @@ def main(argv: list[str] | None = None) -> int:
                     print(render_reports(reports, source, links=links))
                 else:
                     print("No supported package manifests found.")
+                return 0
+            if args.command == "scan":
+                selected = _select(reports, args.package)
+                if not selected:
+                    print("No packages discovered.")
+                    return 0
+                _print_source_risk_findings(selected)
                 return 0
             return _install(source, reports, args, console=console, show_progress=show_progress)
     except (ValueError, RuntimeError, OSError) as error:
