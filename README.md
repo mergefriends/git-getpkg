@@ -4,7 +4,11 @@
 then installs selected Python packages into isolated managed environments.
 
 ## Install
-
+Linux:
+```bash
+apt-get install pipx && pipx ensurepath && pipx install git-getpkg
+```
+Mac:
 ```bash
 brew install pipx && pipx ensurepath && pipx install git-getpkg
 ```
