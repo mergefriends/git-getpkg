@@ -11,7 +11,49 @@ from urllib.parse import urlparse
 from git_getpkg.command import CommandError, run
 from git_getpkg.models import SourceInfo
 
-MAX_REMOTE_CHECKOUT_BYTES = 512 * 1024 * 1024
+try:  # macOS and Linux: distinguish abandoned checkouts from active runs.
+    import fcntl
+except ImportError:  # pragma: no cover - Windows is not currently a supported target.
+    fcntl = None
+
+def _checkout_root() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "git-getpkg" / "checkouts"
+
+
+@contextlib.contextmanager
+def _checkout_lock(checkout: Path):
+    """Hold an advisory lock for a remote checkout while it is in use."""
+    lock_path = checkout / ".git-getpkg.lock"
+    with lock_path.open("w") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def cleanup_stale_remote_checkouts() -> None:
+    """Remove only unlocked checkout directories left by an interrupted prior run."""
+    if fcntl is None:
+        return
+    root = _checkout_root()
+    if not root.is_dir():
+        return
+    for checkout in root.iterdir():
+        if not checkout.is_dir() or checkout.is_symlink() or not checkout.name.startswith("git-getpkg-"):
+            continue
+        try:
+            with (checkout / ".git-getpkg.lock").open("a+") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                shutil.rmtree(checkout)
+        except OSError:
+            continue
 
 
 def _remote_parts(value: str) -> tuple[str | None, str | None, str | None, str | None]:
@@ -41,15 +83,6 @@ def _git_metadata(root: Path) -> tuple[str | None, str | None]:
         commit.stdout.strip() if commit.returncode == 0 else None,
         branch.stdout.strip() if branch.returncode == 0 else None,
     )
-
-
-def _default_branch(url: str) -> str:
-    result = run(["git", "-c", "protocol.ext.allow=never", "ls-remote", "--symref", url, "HEAD"], timeout=45)
-    for line in result.stdout.splitlines():
-        if line.startswith("ref:") and line.endswith("\tHEAD"):
-            ref = line.split()[1]
-            return ref.removeprefix("refs/heads/")
-    raise CommandError("Could not determine the remote repository's default branch.")
 
 
 def _validate_remote_url(value: str) -> None:
@@ -95,18 +128,6 @@ def _github_access_guidance(value: str, error: CommandError) -> CommandError:
     return CommandError(message)
 
 
-def _directory_size(root: Path) -> int:
-    size = 0
-    for directory, _, filenames in os.walk(root, followlinks=False):
-        for filename in filenames:
-            path = Path(directory, filename)
-            try:
-                size += path.lstat().st_size
-            except OSError:
-                continue
-    return size
-
-
 @contextlib.contextmanager
 def open_source(value: str, *, clone_timeout: float = 300):
     path = Path(value).expanduser()
@@ -118,44 +139,34 @@ def open_source(value: str, *, clone_timeout: float = 300):
         yield SourceInfo(value, root, False, commit, branch, None, root.name, None, None)
         return
 
-    temp_root = Path(tempfile.mkdtemp(prefix="git-getpkg-"))
+    checkout_root = _checkout_root()
+    checkout_root.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix="git-getpkg-", dir=checkout_root))
     try:
-        _validate_remote_url(value)
-        try:
-            branch = _default_branch(value)
-        except CommandError as error:
-            raise _github_access_guidance(value, error) from error
-        checkout = temp_root / "source"
-        try:
-            run(
-                [
-                    "git",
-                    "-c",
-                    "protocol.ext.allow=never",
+        with _checkout_lock(temp_root):
+            _validate_remote_url(value)
+            checkout = temp_root / "source"
+            try:
+                run(
+                    [
+                        "git",
+                        "-c",
+                        "protocol.ext.allow=never",
                     "clone",
                     "--depth",
                     "1",
                     "--single-branch",
-                    "--branch",
-                    branch,
                     value,
                     str(checkout),
-                ],
-                timeout=clone_timeout,
+                    ],
+                    timeout=clone_timeout,
+                )
+            except CommandError as error:
+                raise _github_access_guidance(value, error) from error
+            commit, branch = _git_metadata(checkout)
+            repo, namespace, repo_url, namespace_url = _remote_parts(value)
+            yield SourceInfo(
+                value, checkout, True, commit, branch, repo_url, repo or checkout.name, namespace, namespace_url
             )
-        except CommandError as error:
-            raise _github_access_guidance(value, error) from error
-        size = _directory_size(checkout)
-        if size > MAX_REMOTE_CHECKOUT_BYTES:
-            remote_mib = size / 1024 / 1024
-            max_mib = MAX_REMOTE_CHECKOUT_BYTES / 1024 / 1024
-            raise ValueError(
-                f"Remote checkout is {remote_mib:.0f} MiB, above the {max_mib:.0f} MiB safety limit."
-            )
-        commit, _ = _git_metadata(checkout)
-        repo, namespace, repo_url, namespace_url = _remote_parts(value)
-        yield SourceInfo(
-            value, checkout, True, commit, branch, repo_url, repo or checkout.name, namespace, namespace_url
-        )
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

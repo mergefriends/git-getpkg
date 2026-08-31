@@ -33,22 +33,22 @@ def _bandit(root: Path) -> str:
             timeout=30,
         )
     except CommandError as error:
-        return f"Live security scan: unavailable ({error})"
+        return f"Source risk scan (Bandit): unavailable ({error})"
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip() or "Bandit failed"
-        return f"Live security scan: unavailable ({detail.splitlines()[0]})"
+        return f"Source risk scan (Bandit): unavailable ({detail.splitlines()[0]})"
     try:
         findings = json.loads(result.stdout).get("results", [])
     except (json.JSONDecodeError, AttributeError):
-        return "Live security scan: unavailable (Bandit returned invalid JSON)"
+        return "Source risk scan (Bandit): unavailable (Bandit returned invalid JSON)"
     counts = {
         severity: sum(item.get("issue_severity") == severity for item in findings) for severity in ("HIGH", "MEDIUM")
     }
-    return f"Live security scan: {counts['HIGH']} high · {counts['MEDIUM']} medium"
+    return f"Source risk scan (Bandit): {counts['HIGH']} high · {counts['MEDIUM']} medium"
 
 
 def scan_python(root: Path) -> str:
-    """Run the built-in non-executing Python security scanner."""
+    """Run a non-executing source-risk scan; this is not a malware verdict."""
     return _bandit(root)
 
 

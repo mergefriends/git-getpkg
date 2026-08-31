@@ -28,6 +28,7 @@ class Package:
     installable: bool
     install_warning: str | None = None
     metadata_signals: tuple[str, ...] = ()
+    has_console_scripts: bool = False
 
 
 @dataclass

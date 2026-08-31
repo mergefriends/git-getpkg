@@ -65,6 +65,22 @@ class CliTests(unittest.TestCase):
             github_signals.assert_called_once_with(source)
             self.assertIn("GitHub: verified organization", reports[0].signals)
 
+    def test_selected_install_scans_only_the_requested_package(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("first", "second"):
+                package = root / name
+                package.mkdir()
+                (package / "pyproject.toml").write_text(f"[project]\nname = '{name}'\n")
+            source = SourceInfo(".", root, False, None, None, None, "demo", None, None)
+            with patch(
+                "git_getpkg.cli.scan_python", return_value="Source risk scan (Bandit): 0 high · 0 medium"
+            ) as scan:
+                reports = _reports(source, enrich=False, security_package="second")
+            scan.assert_called_once_with(root / "second")
+            self.assertNotIn("Source risk scan", " ".join(reports[0].signals))
+            self.assertIn("Source risk scan", " ".join(reports[1].signals))
+
     def test_list_renderer_outputs_only_the_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

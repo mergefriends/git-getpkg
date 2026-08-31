@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
-import shlex
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,17 +14,9 @@ from git_getpkg.models import Package
 
 
 @dataclass(frozen=True)
-class ShimResult:
-    directory: Path
-    created: list[str]
-    conflicts: list[str]
-
-
-@dataclass(frozen=True)
-class PathResult:
-    configured: bool
-    profile: Path | None
-    message: str
+class DependencyAudit:
+    findings: tuple[tuple[str, str, str, tuple[str, ...]], ...]
+    error: str | None = None
 
 
 def environment_path(package: Package, commit: str | None, source_identity: str) -> Path:
@@ -34,97 +27,106 @@ def environment_path(package: Package, commit: str | None, source_identity: str)
     return data_home / "git-getpkg" / "environments" / f"{safe_name}-{suffix}"
 
 
-def bin_directory() -> Path:
-    return Path(os.environ.get("XDG_BIN_HOME", Path.home() / ".local" / "bin"))
+def pipx_install_command(package: Package) -> list[str]:
+    """Build the bundled-pipx command for a project with declared console scripts."""
+    return [sys.executable, "-m", "pipx", "install", "--python", sys.executable, str(package.directory)]
 
 
-def ensure_bin_on_path(
-    *, directory: Path | None = None, shell: str | None = None, home: Path | None = None
-) -> PathResult:
-    """Persist a narrowly scoped PATH entry for future interactive shells."""
-    directory = directory or bin_directory()
-    if str(directory) in os.environ.get("PATH", "").split(os.pathsep):
-        return PathResult(False, None, f"{directory} is already on PATH")
-    home = home or Path.home()
-    shell_name = Path(shell or os.environ.get("SHELL", "")).name
-    if shell_name == "zsh":
-        profile = home / ".zshrc"
-        entry = f'export PATH={shlex.quote(str(directory))}:"$PATH"'
-    elif shell_name == "bash":
-        profile = home / (".bash_profile" if (home / ".bash_profile").exists() else ".bashrc")
-        entry = f'export PATH={shlex.quote(str(directory))}:"$PATH"'
-    elif shell_name == "fish":
-        config_home = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
-        profile = config_home / "fish" / "config.fish"
-        entry = f"set -gx PATH {shlex.quote(str(directory))} $PATH"
-    else:
-        return PathResult(False, None, f"Could not identify a supported shell; add {directory} to PATH")
-    start = "# >>> git-getpkg PATH >>>"
-    end = "# <<< git-getpkg PATH <<<"
-    existing = profile.read_text() if profile.exists() else ""
-    if start not in existing:
-        profile.parent.mkdir(parents=True, exist_ok=True)
-        suffix = "" if not existing or existing.endswith("\n") else "\n"
-        profile.write_text(f"{existing}{suffix}{start}\n{entry}\n{end}\n")
-        return PathResult(True, profile, f"Added {directory} to PATH in {profile}")
-    return PathResult(False, profile, f"{directory} is already managed in {profile}")
+def install_python_application(package: Package, *, dry_run: bool) -> list[list[str]]:
+    """Install a Python CLI project through the pipx bundled with git-getpkg."""
+    command = pipx_install_command(package)
+    if not dry_run:
+        run(command)
+    return [command]
 
 
-def _console_scripts(package: Package, environment: Path) -> list[str]:
+def validate_python_application(package: Package) -> str | None:
+    """Run pip's dependency check inside the package's pipx-managed environment."""
+    result = run(
+        [sys.executable, "-m", "pipx", "runpip", package.name, "check"],
+        check=False,
+    )
+    if result.returncode == 0:
+        return None
+    return result.stdout.strip() or result.stderr.strip() or "pipx pip check failed"
+
+
+def ensure_pipx_path() -> None:
+    """Let pipx configure the application directory for the current user's shell."""
+    run([sys.executable, "-m", "pipx", "ensurepath"])
+
+
+def expose_python_application(package: Package) -> None:
+    run([sys.executable, "-m", "pipx", "expose", package.name])
+
+
+def remove_python_application(package: Package) -> None:
+    run([sys.executable, "-m", "pipx", "uninstall", package.name], check=False)
+
+
+def remove_environment(environment: Path) -> None:
+    shutil.rmtree(environment, ignore_errors=True)
+
+
+def _site_packages(python: Path) -> Path:
+    result = run([str(python), "-c", "import site; print(site.getsitepackages()[0])"])
+    return Path(result.stdout.strip())
+
+
+def audit_python(environment: Path) -> DependencyAudit:
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    query = """
-import json
-import re
-import sys
-from importlib.metadata import distributions
-
-def normalized(value):
-    return re.sub(r"[-_.]+", "-", value).lower()
-
-target = normalized(sys.argv[1])
-for distribution in distributions():
-    name = distribution.metadata.get("Name", "")
-    if normalized(name) == target:
-        print(json.dumps(sorted(entry.name for entry in distribution.entry_points if entry.group == "console_scripts")))
-        break
-else:
-    print("[]")
-"""
-    result = run([str(python), "-c", query, package.name])
-    import json
-
-    return json.loads(result.stdout)
+    return _audit_path(_site_packages(python))
 
 
-def create_command_shims(
-    package: Package,
-    environment: Path,
-    *,
-    directory: Path | None = None,
-    scripts: list[str] | None = None,
-) -> ShimResult:
-    """Expose only this package's console scripts without replacing user-owned commands."""
-    directory = directory or bin_directory()
-    directory.mkdir(parents=True, exist_ok=True)
-    scripts = scripts if scripts is not None else _console_scripts(package, environment)
-    source_directory = environment / ("Scripts" if os.name == "nt" else "bin")
-    created: list[str] = []
-    conflicts: list[str] = []
-    for name in scripts:
-        source = source_directory / (f"{name}.exe" if os.name == "nt" else name)
-        destination = directory / (f"{name}.cmd" if os.name == "nt" else name)
-        if not source.exists():
-            continue
-        if destination.exists() and "Managed by git-getpkg" not in destination.read_text(errors="ignore"):
-            conflicts.append(name)
-            continue
-        if os.name == "nt":
-            destination.write_text(f'@rem Managed by git-getpkg\r\n@"{source}" %*\r\n')
-        else:
-            destination.write_text(f'#!/bin/sh\n# Managed by git-getpkg\nexec {shlex.quote(str(source))} "$@"\n')
-            destination.chmod(0o755)
-        created.append(name)
-    return ShimResult(directory, created, conflicts)
+def audit_python_application(package: Package) -> DependencyAudit:
+    result = run(
+        [sys.executable, "-m", "pipx", "runpip", package.name, "show", "pip"],
+        check=False,
+    )
+    location = next(
+        (line.partition(":")[2].strip() for line in result.stdout.splitlines() if line.startswith("Location:")),
+        None,
+    )
+    if result.returncode or not location:
+        return DependencyAudit((), result.stderr.strip() or "Could not locate pipx environment for dependency audit")
+    return _audit_path(Path(location))
+
+
+def _audit_path(path: Path) -> DependencyAudit:
+    result = run(
+        [
+            sys.executable,
+            "-m",
+            "pip_audit",
+            "--path",
+            str(path),
+            "--vulnerability-service",
+            "osv",
+            "--format",
+            "json",
+            "--progress-spinner",
+            "off",
+        ],
+        check=False,
+        timeout=60,
+    )
+    if result.returncode not in {0, 1}:
+        return DependencyAudit((), result.stderr.strip() or result.stdout.strip() or "Dependency audit failed")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return DependencyAudit((), "Dependency audit returned unreadable results")
+    packages = payload if isinstance(payload, list) else payload.get("dependencies", [])
+    if not isinstance(packages, list):
+        return DependencyAudit((), "Dependency audit returned an unsupported result format")
+    findings = tuple(
+        (package["name"], package["version"], vulnerability["id"], tuple(vulnerability.get("fix_versions", [])))
+        for package in packages
+        if isinstance(package, dict)
+        for vulnerability in package.get("vulns", [])
+        if isinstance(vulnerability, dict)
+    )
+    return DependencyAudit(findings)
 
 
 def install_python(

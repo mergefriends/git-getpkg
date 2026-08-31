@@ -12,7 +12,24 @@ from pathlib import Path
 
 from git_getpkg.models import Package
 
-IGNORED_DIRECTORIES = {".git", ".venv", "venv", "node_modules", "vendor", "target", "__pycache__"}
+# These commonly contain fixtures, generated output, or illustrative projects rather
+# than packages a person expects to discover and install.
+IGNORED_DIRECTORIES = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "vendor",
+    "target",
+    "__pycache__",
+    "test",
+    "tests",
+    "docs",
+    "examples",
+    "example",
+    "benchmarks",
+    "benchmark",
+}
 
 
 def _package(
@@ -25,6 +42,7 @@ def _package(
     installable: bool,
     warning: str | None = None,
     signals: tuple[str, ...] = (),
+    has_console_scripts: bool = False,
 ) -> Package:
     relative = manifest.parent.relative_to(root)
     return Package(
@@ -37,6 +55,7 @@ def _package(
         installable,
         warning,
         signals,
+        has_console_scripts,
     )
 
 
@@ -79,6 +98,15 @@ def _python_package(root: Path, manifest: Path) -> Package | None:
         project = data.get("project", {})
         name = project.get("name") or manifest.parent.name
         version = project.get("version")
+        scripts = project.get("scripts", {})
+        gui_scripts = project.get("gui-scripts", {})
+        declared_commands = sorted(
+            key
+            for table in (scripts, gui_scripts)
+            if isinstance(table, dict)
+            for key, value in table.items()
+            if isinstance(key, str) and isinstance(value, str)
+        )
         backend = data.get("build-system", {}).get("build-backend")
         warning = (
             f"Uses custom build backend: {backend}"
@@ -93,7 +121,9 @@ def _python_package(root: Path, manifest: Path) -> Package | None:
             "Python",
             installable=True,
             warning=warning,
-            signals=_python_signals(manifest.parent, data),
+            signals=tuple(_python_signals(manifest.parent, data))
+            + ((f"Console commands declared: {', '.join(declared_commands)}",) if declared_commands else ()),
+            has_console_scripts=bool(declared_commands),
         )
     text = manifest.read_text(errors="replace")
     name = re.search(r"name\s*=\s*[\"']([^\"']+)", text)
@@ -149,7 +179,7 @@ def discover(root: Path) -> list[Package]:
             continue
         package: Package | None = None
         try:
-            if manifest.name in {"pyproject.toml", "requirements.txt", "setup.py"}:
+            if manifest.name in {"pyproject.toml", "setup.py"}:
                 package = _python_package(root, manifest)
             elif manifest.name == "package.json":
                 data = json.loads(manifest.read_text())
