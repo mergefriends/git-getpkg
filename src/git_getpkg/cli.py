@@ -468,7 +468,7 @@ def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(
         prog="git getpkg", description="Safely discover and install packages from Git sources."
     )
-    command.add_argument("--version", action="version", version="git-getpkg 0.1.0")
+    command.add_argument("--version", action="version", version="git-getpkg 0.2.0")
     subcommands = command.add_subparsers(dest="command", required=False)
     list_command = subcommands.add_parser("list", help="Discover packages without executing repository code")
     list_command.add_argument("source")
